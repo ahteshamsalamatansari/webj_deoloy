@@ -29,6 +29,11 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from playwright.async_api import async_playwright, Browser
 from openpyxl import load_workbook, Workbook
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -63,6 +68,18 @@ def redact_sensitive_text(text: str) -> str:
     return SENSITIVE_BD_RE.sub(
         "brightdata://<redacted>@brd.superproxy.io", str(text)
     )
+
+
+# ─────────────────────────────────────────────────────────────
+#  EMAIL REPORT  (Google App Password — set vars in Render dashboard)
+# ─────────────────────────────────────────────────────────────
+
+EMAIL_SENDER         = os.getenv("EMAIL_SENDER", "")
+EMAIL_PASSWORD       = os.getenv("EMAIL_PASSWORD", "")       # Google App Password
+EMAIL_RECIPIENT      = os.getenv("EMAIL_RECIPIENT", "")      # comma-separated list ok
+EMAIL_SMTP_HOST      = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
+EMAIL_SMTP_PORT      = int(os.getenv("EMAIL_SMTP_PORT", "587"))
+EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "Webjet Scraper")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1899,6 +1916,99 @@ class WebjetScraper:
 
 
 # ─────────────────────────────────────────────────────────────
+#  EMAIL REPORT SENDER
+# ─────────────────────────────────────────────────────────────
+
+def send_run_report(
+    excel_path: str,
+    route_status: dict,
+    routes: list[tuple[str, str]],
+):
+    """Send email with Excel attachment and run summary via Gmail App Password."""
+    if not all([EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECIPIENT]):
+        print(
+            "\nℹ️  Email report skipped — "
+            "EMAIL_SENDER / EMAIL_PASSWORD / EMAIL_RECIPIENT not set."
+        )
+        return
+
+    run_time = wj_now().strftime("%d %b %Y %H:%M AWST")
+    subject  = f"{EMAIL_SUBJECT_PREFIX} — Run {RUN_ID} complete"
+
+    lines = [
+        "Webjet Scraper — Daily Run Summary",
+        "=" * 40,
+        f"Run ID  : {RUN_ID}",
+        f"Time    : {run_time}",
+        f"Output  : {excel_path}",
+        "",
+        "Route Results",
+        "-" * 40,
+    ]
+    for (o, d) in routes:
+        st   = route_status.get((o, d), "not reached")
+        icon = "OK" if st == "ok" else ("INTERRUPTED" if st == "interrupted" else "FAILED")
+        note = f" -- {st.replace('ERROR: ', '')}" if st not in ("ok", "interrupted", "not reached") else ""
+        lines.append(f"  {o} -> {d} : {icon}{note}")
+
+    if os.path.exists(excel_path):
+        try:
+            wb = load_workbook(excel_path, read_only=True)
+            ws = wb.active
+            headers = [cell.value for cell in ws[1]]
+            status_col = headers.index("Status") if "Status" in headers else None
+            run_id_col = headers.index("Run ID")  if "Run ID"  in headers else None
+            counts: dict[str, int] = {}
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if run_id_col is not None and str(row[run_id_col]) != RUN_ID:
+                    continue
+                key = str(row[status_col]) if status_col is not None else "UNKNOWN"
+                counts[key] = counts.get(key, 0) + 1
+            wb.close()
+            lines.extend([
+                "",
+                "Row Counts (this run)",
+                "-" * 40,
+                *[f"  {k}: {v}" for k, v in sorted(counts.items())],
+                f"  TOTAL: {sum(counts.values())}",
+            ])
+        except Exception as exc:
+            lines.append(f"\n(Could not read Excel stats: {exc})")
+
+    body = "\n".join(lines)
+
+    msg = MIMEMultipart()
+    msg["From"]    = EMAIL_SENDER
+    msg["To"]      = EMAIL_RECIPIENT
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    if os.path.exists(excel_path):
+        try:
+            with open(excel_path, "rb") as fh:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(fh.read())
+            encoders.encode_base64(part)
+            filename = os.path.basename(excel_path)
+            part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+            msg.attach(part)
+        except Exception as exc:
+            print(f"   ⚠️  Could not attach Excel file: {exc}")
+
+    recipients = [r.strip() for r in EMAIL_RECIPIENT.split(",") if r.strip()]
+    try:
+        print(f"\n📧 Sending run report to {EMAIL_RECIPIENT}...")
+        with smtplib.SMTP(EMAIL_SMTP_HOST, EMAIL_SMTP_PORT) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            smtp.sendmail(EMAIL_SENDER, recipients, msg.as_string())
+        print("✅ Email report sent.")
+    except Exception as exc:
+        print(f"❌ Email report failed: {exc}")
+
+
+# ─────────────────────────────────────────────────────────────
 #  ENTRY POINT
 # ─────────────────────────────────────────────────────────────
 
@@ -2113,4 +2223,5 @@ if __name__ == "__main__":
                 print(f"  ❌  {o} → {d}")
                 print(f"       {reason}")
         print("═" * 60)
+        send_run_report(OUTPUT_EXCEL, route_status, routes_to_run)
         restore_run_logging(log_fh)

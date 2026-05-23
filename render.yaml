@@ -22,7 +22,10 @@ services:
     schedule: "0 22 * * *"
 
     # ── Build & run ─────────────────────────────────────────────
-    buildCommand: "bash build.sh"
+    # NOTE: "playwright install --with-deps" requires root and fails on Render.
+    #       Installing chromium without --with-deps works because Render's
+    #       Ubuntu environment already provides all required system libraries.
+    buildCommand: "pip install -r requirements.txt && playwright install chromium"
     startCommand: "python webjet_brightdata.py"
 
     # ── Persistent disk ─────────────────────────────────────────
@@ -38,6 +41,10 @@ services:
     # "sync: false" means the value is NOT stored in render.yaml —
     # you must set it manually in the Render dashboard (keep it secret).
     envVars:
+
+      # Python version — pin to avoid Render defaulting to latest pre-release
+      - key: PYTHON_VERSION
+        value: "3.11.0"
 
       # Bright Data credentials — SET THESE AS SECRETS in Render dashboard
       - key: BD_BROWSER_HOST
@@ -82,3 +89,19 @@ services:
         value: "7"
       - key: WJ_INTER_ROUTE_DELAY_SECONDS
         value: "30"
+
+      # ── Email report (Google App Password) ──────────────────
+      # Set EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECIPIENT as secrets in the
+      # Render dashboard.  Leave unset to disable emailing entirely.
+      - key: EMAIL_SENDER
+        sync: false          # Gmail address that sends the report
+      - key: EMAIL_PASSWORD
+        sync: false          # 16-char Google App Password (NOT your Gmail login)
+      - key: EMAIL_RECIPIENT
+        sync: false          # Destination address (comma-separate for multiple)
+      - key: EMAIL_SMTP_HOST
+        value: smtp.gmail.com
+      - key: EMAIL_SMTP_PORT
+        value: "587"
+      - key: EMAIL_SUBJECT_PREFIX
+        value: "Webjet Scraper"
