@@ -1,0 +1,83 @@
+# ══════════════════════════════════════════════════════════════════
+#  Render.com — Infrastructure-as-Code
+#  Docs: https://render.com/docs/yaml-spec
+#
+#  Deploys a CRON JOB that runs the Webjet scraper daily at
+#  6:00 AM Perth time (AWST, UTC+8) = 10:00 PM UTC.
+#
+#  A 1 GB persistent disk is mounted at /data so the Excel output
+#  and resume state survive between daily runs.
+# ══════════════════════════════════════════════════════════════════
+
+services:
+  - type: cron
+    name: webjet-scraper
+    runtime: python
+    plan: starter                    # upgrade to "standard" for more RAM/CPU
+
+    # ── Schedule ────────────────────────────────────────────────
+    # Render cron uses UTC.  Perth (AWST) = UTC+8, no daylight saving.
+    # "0 22 * * *"  →  10:00 PM UTC  =  6:00 AM Perth next day
+    schedule: "0 22 * * *"
+
+    # ── Build & run ─────────────────────────────────────────────
+    buildCommand: "bash build.sh"
+    startCommand: "python webjet_brightdata.py"
+
+    # ── Persistent disk ─────────────────────────────────────────
+    # Keeps webjet_results.xlsx and logs across daily runs.
+    # Required for the resume feature to work correctly.
+    # NOTE: Persistent disks are a paid Render feature (~$0.25/GB/mo).
+    disk:
+      name: webjet-data
+      mountPath: /data
+      sizeGB: 1
+
+    # ── Environment variables ────────────────────────────────────
+    # "sync: false" means the value is NOT stored in render.yaml —
+    # you must set it manually in the Render dashboard (keep it secret).
+    envVars:
+
+      # Bright Data credentials — SET THESE AS SECRETS in Render dashboard
+      - key: BD_BROWSER_HOST
+        value: brd.superproxy.io
+      - key: BD_BROWSER_PORT
+        value: "9222"
+      - key: BD_BROWSER_USER
+        sync: false          # <-- set in Render dashboard, not here
+      - key: BD_BROWSER_PASS
+        sync: false          # <-- set in Render dashboard, not here
+
+      # Output paths on the persistent disk
+      - key: WJ_OUTPUT_EXCEL
+        value: /data/webjet_results.xlsx
+      - key: WJ_LOG_DIR
+        value: /data/webjet_logs
+      - key: WJ_DEBUG_DIR
+        value: /data/webjet_debug
+
+      # Scraper configuration
+      - key: REX_TIMEZONE
+        value: Australia/Perth
+      - key: WJ_TOTAL_DAYS
+        value: "84"
+      - key: WJ_START_OFFSET_DAYS
+        value: "1"
+      - key: WJ_MAX_ATTEMPTS
+        value: "3"
+      - key: WJ_FINAL_RETRY_ROUNDS
+        value: "1"
+      - key: WJ_RETRY_BACKOFF_SECONDS
+        value: "8"
+      - key: WJ_MAX_RETRY_BACKOFF_SECONDS
+        value: "90"
+      - key: WJ_JOB_TIMEOUT_SECONDS
+        value: "240"
+      - key: WJ_PAGE_LOAD_TIMEOUT
+        value: "90"
+      - key: WJ_RESUME
+        value: "1"
+      - key: WJ_CHECKPOINT_EVERY
+        value: "7"
+      - key: WJ_INTER_ROUTE_DELAY_SECONDS
+        value: "30"

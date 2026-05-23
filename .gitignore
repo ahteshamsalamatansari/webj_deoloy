@@ -1,0 +1,24 @@
+# ── Secrets — NEVER commit ────────────────────────────────────────
+.env
+
+# ── Scraper output (lives on Render persistent disk, not in repo) ──
+*.xlsx
+webjet_debug/
+webjet_logs/
+
+# ── Python ────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyd
+.python-version
+dist/
+build/
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ── OS noise ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
